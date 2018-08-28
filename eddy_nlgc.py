@@ -1,9 +1,6 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 
-
-
-
 import os
 import argparse
 import nibabel as nib
@@ -72,8 +69,8 @@ def main():
     else:
         TOPUP = os.path.realpath(args.topup)
 
-    if args.acqp is None:
-        OPENMP_THREADS = 8
+    if args.openmp is None:
+        OPENMP_THREADS = 4
     else:
         OPENMP_THREADS = args.openmp
 
@@ -92,9 +89,10 @@ def main():
 
     # Extract first data volume for correction
     cmd = 'fslroi ' + DATA + ' ' + PATH + 'single.nii.gz 0 1'
+    print cmd
     os.system(cmd)
 
-    cmd = '~/.local/bin/gradient_unwarp.py '+ PATH + 'single.nii.gz ' + PATH + 'nlgc.nii.gz siemens -g /home/raid/ceichner/Software/gradunwarp_data/coeffConnectom.grad -n'
+    cmd = '~/.local/bin/gradient_unwarp.py '+ PATH + 'single.nii.gz ' + PATH + 'nlgc.nii.gz siemens -g /home/raid/ceichner/Software/one_step_eddy_nlgc/coeffConnectom.grad -n'
     os.system(cmd)
     
     cmd = 'mv fullWarp_abs.nii.gz ' + PATH + 'nlgc_warp.nii.gz'
@@ -114,6 +112,7 @@ def main():
     cmd = 'set OMP_NUM_THREADS = ' + str(OPENMP_THREADS)
     os.system(cmd)
 
+
     # Run eddy from home directory installation
     cmd =\
     '/home/raid/ceichner/Software/eddy/eddy_openmp \
@@ -123,13 +122,13 @@ def main():
         --acqp=' + ACQP + ' \
         --bvecs=' + BVEC + ' \
         --bvals=' + BVAL + ' \
-        --out=' + PATH + 'eddy \
-        --topup=' + TOPUP + ' \
-        --residuals \
-        --repol \
+        --out=' + PATH + 'eddy_tmp \
         --dfields \
+        --repol \
         --data_is_shelled \
         -v'
+
+    print cmd 
     os.system(cmd)
 
     # Move all displacement field files in subdirectory
@@ -171,7 +170,7 @@ def main():
     os.system('mkdir -p split_data')
     os.system('mkdir -p corr_data')
 
-    cmd = 'fslsplit ' + PATH + '/eddy.eddy_outlier_free_data.nii.gz split_data/data -t'
+    cmd = 'fslsplit ' + PATH + '/*eddy_outlier_free*.nii.gz split_data/data -t'
     os.system(cmd)
 
     SPLIT_DATA_FILES = sorted(os.listdir('split_data/'))
@@ -183,14 +182,11 @@ def main():
                 -r split_data/' + SPLIT_DATA_FILES[0] + ' \
                 -o corr_data/' + SPLIT_DATA_FILES[i] + ' \
                 -w comb_warp/' + COMB_WARP_FILES[i] + ' \
-                --interp=spline \
+                --interp=nn  \
                 --datatype=float'
         os.system(cmd)
 
-    # Wait for al warps to be done
-    while len(os.listdir('corr_data/')) < len(os.listdir('split_data/')):
-        pass
-
+    
     cmd = 'fslmerge -t ' + OUT + ' corr_data/*'
     os.system(cmd)
 
