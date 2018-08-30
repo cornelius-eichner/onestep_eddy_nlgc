@@ -8,6 +8,10 @@ import numpy as np
 
 DESCRIPTION =   'Joint correction of eddy currents and gradient non linearity correction using FSL tools. Cornelius Eichner 2018'
 
+PATH_GRAD_UNWARP = '~/.local/bin/gradient_unwarp.py'
+PATH_EDDY_OPENMP = '~/Software/eddy/eddy_openmp'
+
+
 def buildArgsParser():
     p = argparse.ArgumentParser(description=DESCRIPTION)
     p.add_argument('--in', dest='data', action='store', type=str,
@@ -33,6 +37,9 @@ def buildArgsParser():
 
     p.add_argument('--out', dest='out', action='store', type=str,
                             help='Path of the output volume')
+
+    p.add_argument('--pmat', dest='pmat', action='store', type=str,
+                            help='Path of the affine transform to apply at the end of registrationb (e.g., T1 anatomy)')
 
     p.add_argument('--mp', dest='openmp', action='store', type=int, default='1', 
                             help='Optional: OpenMP parallelization factor (default 8)')
@@ -74,6 +81,11 @@ def main():
     else:
         OPENMP_THREADS = args.openmp
 
+    if args.pmat is None:
+        PMAT = None
+    else:
+        PMAT = args.pmat
+
 
     PATH = os.path.dirname(os.path.realpath(args.data)) + '/'
     os.chdir(PATH)
@@ -87,12 +99,13 @@ def main():
     ######################
     # Calculate Gradient Non Linearities
 
+    print 'Calculation of Gradient Nonlinearities'
+
     # Extract first data volume for correction
     cmd = 'fslroi ' + DATA + ' ' + PATH + 'single.nii.gz 0 1'
-    print cmd
     os.system(cmd)
 
-    cmd = '~/.local/bin/gradient_unwarp.py '+ PATH + 'single.nii.gz ' + PATH + 'nlgc.nii.gz siemens -g /home/raid/ceichner/Software/one_step_eddy_nlgc/coeffConnectom.grad -n'
+    cmd = PATH_GRAD_UNWARP + ' '+ PATH + 'single.nii.gz ' + PATH + 'nlgc.nii.gz siemens -g /home/raid/ceichner/Software/one_step_eddy_nlgc/coeffConnectom.grad -n'
     os.system(cmd)
     
     cmd = 'mv fullWarp_abs.nii.gz ' + PATH + 'nlgc_warp.nii.gz'
@@ -108,6 +121,8 @@ def main():
     ######################
     # Calculate eddy displacement fields
 
+    print 'Performing Eddy Correction'
+
     # Set number of parallel processing threads
     cmd = 'set OMP_NUM_THREADS = ' + str(OPENMP_THREADS)
     os.system(cmd)
@@ -115,7 +130,7 @@ def main():
 
     # Run eddy from home directory installation
     cmd =\
-    '/home/raid/ceichner/Software/eddy/eddy_openmp \
+    PATH_EDDY_OPENMP + ' \
         --imain='+ DATA + ' \
         --mask=' + MASK + ' \
         --index=' + INDEX + ' \
@@ -125,10 +140,8 @@ def main():
         --out=' + PATH + 'eddy_tmp \
         --dfields \
         --repol \
-        --data_is_shelled \
-        -v'
+        --data_is_shelled'
 
-    print cmd 
     os.system(cmd)
 
     # Move all displacement field files in subdirectory
@@ -140,6 +153,9 @@ def main():
     ######################
     # Combine both warp fields 
 
+    print 'Combining Warp Fields'
+
+
     os.system('mkdir -p comb_warp')
 
     # This code combines both warp fields by simple addition.
@@ -150,15 +166,23 @@ def main():
     '''
 
     # Combination of warpfields by concatenation
-
-    for i in DFIELD_FILES:
-        cmd = 'convertwarp \
-                    -o comb_warp/nlcg.' + i + '\
-                    -r nlgc_warp.nii.gz \
-                    --warp1=dfield/' + i + ' \
-                    --warp2=nlgc_warp.nii.gz \
-                    -v'
-        os.system(cmd)
+    if PMAT is None:
+        for i in DFIELD_FILES:
+            cmd = 'convertwarp \
+                        -o comb_warp/nlcg.' + i + '\
+                        -r nlgc_warp.nii.gz \
+                        --warp1=dfield/' + i + ' \
+                        --warp2=nlgc_warp.nii.gz '
+            os.system(cmd)
+    else:
+        for i in DFIELD_FILES:
+            cmd = 'convertwarp \
+                        -o comb_warp/nlcg.' + i + ' \
+                        -r nlgc_warp.nii.gz \
+                        --postmat=' + PMAT + ' \
+                        --warp1=dfield/' + i + ' \
+                        --warp2=nlgc_warp.nii.gz '
+            os.system(cmd)
 
 
     COMB_WARP_FILES = sorted(os.listdir('comb_warp/'))
@@ -166,6 +190,8 @@ def main():
 
     ######################
     # Apply warp for using combined field
+
+    print 'Application of Combined Warp Fields'
 
     os.system('mkdir -p split_data')
     os.system('mkdir -p corr_data')
@@ -182,14 +208,13 @@ def main():
                 -r split_data/' + SPLIT_DATA_FILES[0] + ' \
                 -o corr_data/' + SPLIT_DATA_FILES[i] + ' \
                 -w comb_warp/' + COMB_WARP_FILES[i] + ' \
-                --interp=nn  \
+                --interp=trilinear  \
                 --datatype=float'
         os.system(cmd)
 
     
     cmd = 'fslmerge -t ' + OUT + ' corr_data/*'
     os.system(cmd)
-
 
 
 if __name__ == '__main__':
