@@ -10,6 +10,7 @@ DESCRIPTION =   'Joint correction of eddy currents and gradient non linearity co
 
 PATH_GRAD_UNWARP = '~/.local/bin/gradient_unwarp.py'
 PATH_EDDY_OPENMP = '~/Software/eddy/eddy_openmp'
+PATH_CALC_JACOBIAN = '/home/raid/ceichner/Software/scripts/calc_jacobian.py'
 
 
 def buildArgsParser():
@@ -37,6 +38,9 @@ def buildArgsParser():
 
     p.add_argument('--out', dest='out', action='store', type=str,
                             help='Path of the output volume')
+
+    p.add_argument('--pmat', dest='pmat', action='store', type=str,
+                            help='Path of the affine transform to apply at the end of registrationb (e.g., T1 anatomy)')
 
     p.add_argument('--mp', dest='openmp', action='store', type=int, default='1', 
                             help='Optional: OpenMP parallelization factor (default 8)')
@@ -81,6 +85,11 @@ def main():
     else:
         OPENMP_THREADS = args.openmp
 
+    if args.pmat is None:
+        PMAT = None
+    else:
+        PMAT = args.pmat
+
     ######################
     # Change Pathways to operate in data folder
 
@@ -95,10 +104,10 @@ def main():
 
     ######################
     # Calculate Gradient Non Linearities
+    os.system("echo Correction of gradient non linearities")
 
     # Extract first data volume for correction
     cmd = 'fslroi ' + DATA + ' ' + PATH + 'single.nii.gz 0 1'
-    print cmd
     os.system(cmd)
 
     # Perform gradient non linearity correction
@@ -110,7 +119,7 @@ def main():
     os.system(cmd)
 
     """
-    Resulting output files:
+    Resulting outppy    ut files:
     single.nii.gz           first volume of data extracted, as gradient unwarper cannot handle 4D data
     nlgc.nii.gz             first volume, corrected for gradient non linearities, will not be further employed
     nlgc_warp.nii.gz        warp field for gradient correction
@@ -119,6 +128,7 @@ def main():
 
     ######################
     # Calculate eddy displacement fields
+    os.system("echo Running FSL Eddy ")
 
     # Set number of parallel processing threads
     cmd = 'set OMP_NUM_THREADS = ' + str(OPENMP_THREADS)
@@ -133,12 +143,12 @@ def main():
         --acqp=' + ACQP + ' \
         --bvecs=' + BVEC + ' \
         --bvals=' + BVAL + ' \
+        --topup=' + TOPUP + ' \
         --out=' + PATH + 'eddy_tmp \
         --dfields= \
         --repol \
         --data_is_shelled'
 
-    os.system("echo Running FSL Eddy ")
     os.system(cmd)
     os.system("echo Eddy Complete")
 
@@ -162,19 +172,28 @@ def main():
 
     ######################
     # Combine both warp fields 
-
     os.system("echo Combining Warp Fields")
+
     os.system('mkdir -p comb_warp')
 
     # Combination of warpfields by concatenation
-    for i in DFIELD_FILES:
-        cmd = 'convertwarp \
-                    -o comb_warp/nlcg.' + i + '\
-                    -r nlgc_warp.nii.gz \
-                    --warp1=dfield/' + i + ' \
-                    --warp2=nlgc_warp.nii.gz'
-        os.system(cmd)
-
+    if PMAT is None:
+        for i in DFIELD_FILES:
+            cmd = 'convertwarp \
+                        -o comb_warp/nlcg.' + i + '\
+                        -r nlgc_warp.nii.gz \
+                        --warp1=dfield/' + i + ' \
+                        --warp2=nlgc_warp.nii.gz '
+            os.system(cmd)
+    else:
+        for i in DFIELD_FILES:
+            cmd = 'convertwarp \
+                        -o comb_warp/nlcg.' + i + ' \
+                        -r nlgc_warp.nii.gz \
+                        --postmat=' + PMAT + ' \
+                        --warp1=dfield/' + i + ' \
+                        --warp2=nlgc_warp.nii.gz '
+            os.system(cmd)
 
     COMB_WARP_FILES = sorted(os.listdir('comb_warp/'))
 
@@ -186,9 +205,10 @@ def main():
 
     ######################
     # Apply warp for using combined field
+    os.system("echo Application of combined warp fields")
 
     os.system('mkdir -p split_data')
-    os.system('mkdir -p corr_data')
+    os.system('mkdir -p warped_data')
 
     cmd = 'fslsplit ' + PATH + '/*eddy_outlier_free*.nii.gz split_data/data -t'
     os.system(cmd)
@@ -200,19 +220,33 @@ def main():
         cmd = 'applywarp \
                 -i split_data/' + SPLIT_DATA_FILES[i] + ' \
                 -r split_data/' + SPLIT_DATA_FILES[0] + ' \
-                -o corr_data/' + SPLIT_DATA_FILES[i] + ' \
+                -o warped_data/' + SPLIT_DATA_FILES[i] + ' \
                 -w comb_warp/' + COMB_WARP_FILES[i] + ' \
-                --interp=nn  \
+                --interp=spline \
                 --datatype=float'
         os.system(cmd)
 
-    # Wait for al warps to be done
-    while len(os.listdir('corr_data/')) < len(os.listdir('split_data/')):
-        pass
+
+    ######################
+    # Correct for warp signal bias using Jacobian determinante
+    os.system("echo Correction of signal intensities with Jacobian Determinant")
+
+    os.system('mkdir -p jac_det_data')
+    os.system('mkdir -p corr_data')
+
+    for i in xrange(len(os.listdir('comb_warp/'))):
+        cmd = PATH_CALC_JACOBIAN + ' --in comb_warp/' + COMB_WARP_FILES[i] + ' --out jac_det_data/jac.' + COMB_WARP_FILES[i]
+        os.system(cmd)
+        cmd = 'fslmaths warped_data/' + SPLIT_DATA_FILES[i] + ' -div jac_det_data/jac.' + COMB_WARP_FILES[i] + ' corr_data/' + SPLIT_DATA_FILES[i]
+        os.system(cmd)
+
+
+    ######################
+    # Merge warped volumes
+    os.system("echo Merging corrected volumes")
 
     cmd = 'fslmerge -t ' + OUT + ' corr_data/*'
     os.system(cmd)
-
 
     """
     Resulting output files:
