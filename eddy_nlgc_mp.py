@@ -119,7 +119,7 @@ def main():
     os.system(cmd)
 
     """
-    Resulting outppy    ut files:
+    Resulting output files:
     single.nii.gz           first volume of data extracted, as gradient unwarper cannot handle 4D data
     nlgc.nii.gz             first volume, corrected for gradient non linearities, will not be further employed
     nlgc_warp.nii.gz        warp field for gradient correction
