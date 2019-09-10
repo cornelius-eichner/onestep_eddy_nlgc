@@ -237,7 +237,7 @@ def main():
     for i in xrange(len(os.listdir('comb_warp/'))):
         cmd = PATH_CALC_JACOBIAN + ' --in comb_warp/' + COMB_WARP_FILES[i] + ' --out jac_det_data/jac.' + COMB_WARP_FILES[i]
         os.system(cmd)
-        cmd = 'fslmaths warped_data/' + SPLIT_DATA_FILES[i] + ' -div jac_det_data/jac.' + COMB_WARP_FILES[i] + ' corr_data/' + SPLIT_DATA_FILES[i]
+        cmd = 'fslmaths warped_data/' + SPLIT_DATA_FILES[i] + ' -mul jac_det_data/jac.' + COMB_WARP_FILES[i] + ' corr_data/' + SPLIT_DATA_FILES[i]
         os.system(cmd)
 
 
